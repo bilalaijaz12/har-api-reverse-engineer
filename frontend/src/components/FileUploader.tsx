@@ -4,12 +4,13 @@ import { useState, useRef } from "react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Upload, File, X } from "lucide-react";
+import { Upload, File, X, AlertCircle } from "lucide-react";
 
 interface FileUploaderProps {
   onUploadStart: () => void;
   onUploadSuccess: (sessionId: string, apiCount: number) => void;
   onUploadError: (message: string) => void;
+  onFileRemoved: () => void;
   onUploadEnd: () => void;
 }
 
@@ -17,11 +18,13 @@ export function FileUploader({
   onUploadStart,
   onUploadSuccess,
   onUploadError,
+  onFileRemoved,
   onUploadEnd
 }: FileUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
@@ -64,13 +67,16 @@ export function FileUploader({
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
     }
-    onUploadError("No file selected");
+    
+    // Notify parent that file has been removed
+    onFileRemoved();
   };
 
   const handleUpload = async () => {
     if (!selectedFile) return;
     
     onUploadStart();
+    setIsUploading(true);
     setUploadProgress(0);
     
     const formData = new FormData();
@@ -106,21 +112,22 @@ export function FileUploader({
     } catch (error) {
       onUploadError(error instanceof Error ? error.message : 'An unknown error occurred');
     } finally {
+      setIsUploading(false);
       onUploadEnd();
     }
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Upload HAR File</CardTitle>
-        <CardDescription>
+    <Card className="shadow-lg">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-xl">Upload HAR File</CardTitle>
+        <CardDescription className="text-base">
           Select or drag & drop a .har file to upload
         </CardDescription>
       </CardHeader>
       <CardContent>
         <div 
-          className={`border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors ${
+          className={`border-2 border-dashed rounded-lg p-8 text-center cursor-pointer transition-colors ${
             isDragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400'
           }`}
           onDragOver={handleDragOver}
@@ -135,43 +142,55 @@ export function FileUploader({
             ref={fileInputRef}
             onChange={handleFileSelect}
           />
-          <Upload className="mx-auto h-12 w-12 text-gray-400" />
-          <p className="mt-2 text-sm text-gray-600">
-            Drag and drop your .har file here, or click to browse
+          <Upload className="mx-auto h-14 w-14 text-gray-400 mb-4" />
+          <p className="text-lg text-gray-600 mb-2">
+            Drag and drop your .har file here
+          </p>
+          <p className="text-sm text-gray-500">
+            or click to browse
           </p>
         </div>
         
         {selectedFile && (
-          <div className="mt-4">
-            <div className="flex items-center justify-between bg-gray-50 p-3 rounded-md">
-              <div className="flex items-center space-x-2">
-                <File className="h-5 w-5 text-blue-500" />
-                <span className="font-medium text-sm truncate max-w-[200px]">
-                  {selectedFile.name}
-                </span>
-                <span className="text-gray-500 text-xs">
-                  ({Math.round(selectedFile.size / 1024)} KB)
-                </span>
+          <div className="mt-6 space-y-4">
+            <div className="flex items-center justify-between bg-gray-50 p-4 rounded-md">
+              <div className="flex items-center space-x-3">
+                <File className="h-6 w-6 text-blue-500" />
+                <div>
+                  <p className="font-medium text-base truncate max-w-[200px]">
+                    {selectedFile.name}
+                  </p>
+                  <p className="text-gray-500 text-sm">
+                    {Math.round(selectedFile.size / 1024)} KB
+                  </p>
+                </div>
               </div>
               <Button
                 variant="ghost"
                 size="icon"
                 onClick={handleClearFile}
+                className="h-8 w-8"
               >
-                <X className="h-4 w-4" />
+                <X className="h-5 w-5" />
               </Button>
             </div>
             
             {uploadProgress > 0 && (
-              <Progress value={uploadProgress} className="mt-2" />
+              <div className="space-y-1">
+                <div className="flex justify-between text-sm text-gray-500">
+                  <span>Uploading...</span>
+                  <span>{uploadProgress}%</span>
+                </div>
+                <Progress value={uploadProgress} className="h-2" />
+              </div>
             )}
             
             <Button 
-              className="mt-4 w-full"
+              className="w-full h-12 text-base"
               onClick={handleUpload}
-              disabled={uploadProgress > 0 && uploadProgress < 100}
+              disabled={isUploading}
             >
-              {uploadProgress > 0 && uploadProgress < 100
+              {isUploading
                 ? 'Uploading...'
                 : 'Upload HAR File'}
             </Button>

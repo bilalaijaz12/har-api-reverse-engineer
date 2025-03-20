@@ -6,7 +6,7 @@ from typing import Optional, Dict, Any, List
 from utils.storage import session_storage
 
 # Import LLM utilities
-from utils.llm_service import identify_api_request
+from utils.llm_service import identify_api_request_with_confidence, verify_har_relevance
 from utils.curl_generator import generate_curl_command
 from utils.api_info import extract_api_info
 
@@ -37,86 +37,41 @@ async def analyze_api(request: AnalyzeRequest):
     print(f"Found {len(processed_har)} potential API requests in session {request.session_id}")
     
     try:
-        # Pre-filter JavaScript files if user is looking for flight tracking data
-        if any(keyword in request.description.lower() for keyword in ['flight', 'track', 'playback', 'data', 'map']):
-            # Move JavaScript files to the end of the list
-            sorted_requests = sorted(
-                processed_har,
-                key=lambda req: (
-                    # Prioritize based on multiple factors:
-                    # 1. Is it a JavaScript file? (penalize)
-                    1 if req.get('url', '').endswith('.js') or 'javascript' in req.get('response_content_type', '').lower() else 0,
-                    # 2. Is it a data API? (prioritize)
-                    0 if '/api/' in req.get('url', '') or '/data/' in req.get('url', '') or '/common/' in req.get('url', '') else 1,
-                    # 3. Does it return JSON? (prioritize)
-                    0 if 'json' in req.get('response_content_type', '').lower() else 1,
-                    # 4. Use the relevance score if available
-                    -1 * req.get('relevance_score', 0)
-                )
-            )
-            # Use these sorted requests for the API identification
-            processed_har = sorted_requests
+        # First, verify if the user's query is relevant to the HAR content
+        is_relevant = verify_har_relevance(processed_har, request.description)
         
-        # Use LLM to identify the most relevant API request
-        api_request = identify_api_request(processed_har, request.description)
+        if not is_relevant:
+            return {
+                "message": "The HAR file does not appear to contain APIs related to your query.",
+                "curl_command": None,
+                "api_info": {
+                    "description": "No relevant API found. This HAR file does not appear to contain data for your query.",
+                    "parameters": [],
+                    "authentication": {"type": "unknown", "location": "unknown", "key": "unknown"},
+                    "usage_notes": "The APIs in this HAR file do not match your description.",
+                    "response_format": "Unknown response format",
+                    "confidence": 0.0
+                },
+                "total_api_count": len(processed_har)
+            }
         
-        # Additional validation for flight data APIs
-        if 'flight' in request.description.lower() or 'track' in request.description.lower():
-            # Check if the identified API is a JavaScript file when user is looking for data
-            if api_request.get('url', '').endswith('.js') or 'javascript' in api_request.get('response_content_type', '').lower():
-                # Try to find a better match
-                for req in processed_har:
-                    # Look for actual flight data API endpoints
-                    if ('/api/' in req.get('url', '') and 'flight' in req.get('url', '').lower() and 
-                        not req.get('url', '').endswith('.js')):
-                        api_request = req
-                        break
+        # Use LLM to identify the most relevant API request with confidence score
+        api_request, confidence = identify_api_request_with_confidence(processed_har, request.description)
         
-        # Validate identified API request to catch common errors
-        validation_warnings = []
-        
-        # Check for potential ID mismatches in the body
-        if 'body' in api_request and isinstance(api_request.get('body', {}).get('text', ''), str):
-            body_text = api_request['body']['text']
-            # Check if the body contains only numeric IDs that might be extracted from elsewhere
-            if body_text.strip().isdigit():
-                # Cross-reference this ID against request URLs to validate
-                id_in_question = body_text.strip()
-                image_urls = [req['url'] for req in processed_har if 'image' in req.get('response_content_type', '')]
-                if any(id_in_question in url for url in image_urls):
-                    # Check if this ID appears in other requests to this endpoint
-                    endpoint_requests = [req for req in processed_har if req['url'] == api_request['url']]
-                    if not any(id_in_question in req.get('body', {}).get('text', '') for req in endpoint_requests if req != api_request):
-                        validation_warnings.append(f"The ID '{id_in_question}' may have been incorrectly extracted from image URLs rather than actual request data")
-        
-        # Important: Make sure we're working with the exact, original request
-        # Find the original, complete request from the processed_har list
-        original_request = None
-        for req in processed_har:
-            if (req.get('url') == api_request.get('url') and 
-                req.get('method') == api_request.get('method')):
-                original_request = req
-                break
-        
-        # Use the original request if found, otherwise use the one returned by the LLM
-        if original_request:
-            api_request = original_request
-            
         # Generate curl command from the identified API request
-        curl_command = generate_curl_command(api_request)
+        curl_command = generate_curl_command(api_request) if confidence >= 0.3 else None
         
         # Extract additional API information
         api_info = extract_api_info(api_request)
         
-        # Add any validation warnings to the response
-        if validation_warnings:
-            api_info["validation_warnings"] = validation_warnings
+        # Add confidence score to API info
+        api_info["confidence"] = confidence
         
         return {
             "curl_command": curl_command,
-            "api_request": api_request,
+            "api_request": api_request if confidence >= 0.3 else None,
             "api_info": api_info,
-            "message": "API request identified successfully",
+            "message": "API request identified successfully" if confidence >= 0.3 else "Low confidence match - API may not be relevant",
             "total_api_count": len(processed_har)
         }
     except Exception as e:

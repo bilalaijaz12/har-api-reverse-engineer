@@ -9,7 +9,7 @@ import { Search, Loader2 } from "lucide-react";
 interface DescriptionInputProps {
   sessionId: string;
   onProcessingStart: () => void;
-  onProcessingSuccess: (curlCommand: string, description: string, apiInfo: any) => void;
+  onProcessingSuccess: (curlCommand: string | null, description: string, apiInfo: any) => void;
   onProcessingError: (message: string) => void;
   onProcessingEnd: () => void;
 }
@@ -30,8 +30,9 @@ export function DescriptionInput({
       return;
     }
     
-    setIsProcessing(true);
+    // Clear previous results before starting new analysis
     onProcessingStart();
+    setIsProcessing(true);
     
     try {
       const response = await fetch('http://localhost:8000/api/analyze', {
@@ -61,37 +62,42 @@ export function DescriptionInput({
   };
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Describe the API</CardTitle>
-        <CardDescription>
+    <Card className="shadow-lg">
+      <CardHeader className="pb-4">
+        <CardTitle className="text-xl">Describe the API</CardTitle>
+        <CardDescription className="text-base">
           Tell us what API you're looking for in the HAR file
         </CardDescription>
       </CardHeader>
       <CardContent>
         <Textarea
           placeholder="For example: 'Return the API that fetches the weather of San Francisco' or 'Find the login API endpoint'"
-          className="min-h-[100px]"
+          className="min-h-[120px] text-base p-4 resize-none"
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
-        <div className="text-right text-xs text-gray-500 mt-1">
-          {description.length} characters
+        <div className="flex justify-between items-center mt-2 mb-4">
+          <div className="text-sm text-gray-500">
+            Be specific about what data you're looking for
+          </div>
+          <div className="text-sm text-gray-500">
+            {description.length} characters
+          </div>
         </div>
         
         <Button 
-          className="mt-4 w-full"
+          className="w-full h-12 text-base"
           onClick={handleSubmit}
           disabled={isProcessing || !description.trim()}
         >
           {isProcessing ? (
             <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <Loader2 className="mr-2 h-5 w-5 animate-spin" />
               Analyzing...
             </>
           ) : (
             <>
-              <Search className="mr-2 h-4 w-4" />
+              <Search className="mr-2 h-5 w-5" />
               Find API
             </>
           )}
