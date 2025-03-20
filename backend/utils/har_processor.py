@@ -57,11 +57,34 @@ def process_har_file(content: bytes) -> List[Dict[str, Any]]:
         ]):
             continue
             
-        # Include all JSON responses and XHR requests
-        is_json = 'json' in content_type.lower() or 'application/javascript' in content_type.lower()
+        # Calculate an API relevance score to better classify requests
+        relevance_score = 0
+        
+        # Check if it's a potential data API
+        is_json = 'json' in content_type.lower()
+        is_javascript = 'javascript' in content_type.lower() or url.endswith('.js')
         is_data = 'application/octet-stream' in content_type.lower()
         is_xhr = request.get('method', '') != 'GET' or is_json or is_data or is_api_endpoint
         
+        # Increase score for actual API endpoints
+        if '/api/' in url or '.api.' in url:
+            relevance_score += 10
+        if '/data/' in url or '/common/' in url:
+            relevance_score += 8
+            
+        # Increase score for JSON responses
+        if is_json:
+            relevance_score += 5
+        
+        # Decrease score for JavaScript files
+        if is_javascript:
+            relevance_score -= 5
+            
+        # Increase score for non-GET methods (POST, PUT, etc.)
+        if request.get('method', '') != 'GET':
+            relevance_score += 3
+            
+        # Include the request if it seems relevant
         if is_xhr:
             # Basic structure for each API request
             api_request = {
@@ -70,7 +93,8 @@ def process_har_file(content: bytes) -> List[Dict[str, Any]]:
                 'headers': {header['name']: header['value'] for header in request.get('headers', [])},
                 'query_params': {param['name']: param['value'] for param in request.get('queryString', [])},
                 'response_status': response.get('status'),
-                'response_content_type': content_type
+                'response_content_type': content_type,
+                'relevance_score': relevance_score  # Add the calculated score
             }
             
             # Extract request body if present with enhanced information

@@ -37,8 +37,40 @@ async def analyze_api(request: AnalyzeRequest):
     print(f"Found {len(processed_har)} potential API requests in session {request.session_id}")
     
     try:
+        # Pre-filter JavaScript files if user is looking for flight tracking data
+        if any(keyword in request.description.lower() for keyword in ['flight', 'track', 'playback', 'data', 'map']):
+            # Move JavaScript files to the end of the list
+            sorted_requests = sorted(
+                processed_har,
+                key=lambda req: (
+                    # Prioritize based on multiple factors:
+                    # 1. Is it a JavaScript file? (penalize)
+                    1 if req.get('url', '').endswith('.js') or 'javascript' in req.get('response_content_type', '').lower() else 0,
+                    # 2. Is it a data API? (prioritize)
+                    0 if '/api/' in req.get('url', '') or '/data/' in req.get('url', '') or '/common/' in req.get('url', '') else 1,
+                    # 3. Does it return JSON? (prioritize)
+                    0 if 'json' in req.get('response_content_type', '').lower() else 1,
+                    # 4. Use the relevance score if available
+                    -1 * req.get('relevance_score', 0)
+                )
+            )
+            # Use these sorted requests for the API identification
+            processed_har = sorted_requests
+        
         # Use LLM to identify the most relevant API request
         api_request = identify_api_request(processed_har, request.description)
+        
+        # Additional validation for flight data APIs
+        if 'flight' in request.description.lower() or 'track' in request.description.lower():
+            # Check if the identified API is a JavaScript file when user is looking for data
+            if api_request.get('url', '').endswith('.js') or 'javascript' in api_request.get('response_content_type', '').lower():
+                # Try to find a better match
+                for req in processed_har:
+                    # Look for actual flight data API endpoints
+                    if ('/api/' in req.get('url', '') and 'flight' in req.get('url', '').lower() and 
+                        not req.get('url', '').endswith('.js')):
+                        api_request = req
+                        break
         
         # Validate identified API request to catch common errors
         validation_warnings = []
