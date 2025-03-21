@@ -57,12 +57,12 @@ async def test_api(request: TestRequest):
             # If not JSON, return as plain text
             response_text = result.stdout
         
-        # Attempt to determine status code (this is approximate since we're using subprocess)
+        
         status_code = 200  # Default to 200 if successful
         
         return {
             "status_code": status_code,
-            "headers": {},  # We don't have header info when using subprocess
+            "headers": {},  
             "response": response_text
         }
     
@@ -81,7 +81,7 @@ async def interpret_response(request: InterpretRequest):
     Use OpenAI to interpret the API response in natural language.
     """
     try:
-        # Construct the prompt
+        
         system_prompt = """You are an API expert who explains API responses in plain language.
         Your task is to analyze an API response and explain what information it contains and what it means.
         Provide a concise summary followed by detailed explanations of the key data points.
@@ -98,7 +98,7 @@ async def interpret_response(request: InterpretRequest):
         Please interpret this API response in natural language. Explain what data it contains and what it means.
         """
         
-        # Call the OpenAI API
+       
         try:
             import openai
             openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -119,7 +119,7 @@ async def interpret_response(request: InterpretRequest):
                 "interpretation": interpretation
             }
         except ImportError:
-            # If OpenAI isn't available, provide a fallback response
+             #a fallback response
             return {
                 "interpretation": "API response interpretation is not available. Please check the raw response."
             }
