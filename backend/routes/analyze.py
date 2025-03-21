@@ -50,7 +50,7 @@ async def analyze_api(request: AnalyzeRequest):
                     "authentication": {"type": "unknown", "location": "unknown", "key": "unknown"},
                     "usage_notes": "The APIs in this HAR file do not match your description.",
                     "response_format": "Unknown response format",
-                    "confidence": 0.0
+                    "confidence": 0.0  # Explicitly set to zero
                 },
                 "total_api_count": len(processed_har)
             }
@@ -58,20 +58,26 @@ async def analyze_api(request: AnalyzeRequest):
         # Use LLM to identify the most relevant API request with confidence score
         api_request, confidence = identify_api_request_with_confidence(processed_har, request.description)
         
-        # Generate curl command from the identified API request
-        curl_command = generate_curl_command(api_request) if confidence >= 0.3 else None
+        # Generate curl command only if confidence is adequate
+        # Lower the threshold to make sure we're getting proper scores
+        curl_command = generate_curl_command(api_request) if confidence >= 0.1 else None
         
         # Extract additional API information
         api_info = extract_api_info(api_request)
         
-        # Add confidence score to API info
+        # Make sure the confidence from LLM is preserved exactly
         api_info["confidence"] = confidence
+        
+        # Add warning message for low confidence
+        if confidence < 0.4:
+            api_info["warning"] = "Low confidence match. The requested data may not be available in this HAR file."
         
         return {
             "curl_command": curl_command,
-            "api_request": api_request if confidence >= 0.3 else None,
+            "api_request": api_request if confidence >= 0.1 else None,
             "api_info": api_info,
-            "message": "API request identified successfully" if confidence >= 0.3 else "Low confidence match - API may not be relevant",
+            "message": "API request identified successfully" if confidence >= 0.4 else 
+                      "Low confidence match - API may not be relevant",
             "total_api_count": len(processed_har)
         }
     except Exception as e:

@@ -3,14 +3,13 @@ import json
 import openai
 from dotenv import load_dotenv
 from typing import List, Dict, Any, Tuple
+import re
 
 # Load environment variables
 load_dotenv()
 
 # Set OpenAI API key
 openai.api_key = os.getenv("OPENAI_API_KEY")
-
-
 
 def optimize_for_tokens(api_requests: List[Dict[str, Any]], max_tokens: int = 12000) -> List[Dict[str, Any]]:
     """
@@ -35,25 +34,38 @@ def optimize_for_tokens(api_requests: List[Dict[str, Any]], max_tokens: int = 12
     for request in api_requests:
         url = request.get('url', '').lower()
         content_type = request.get('response_content_type', '').lower()
+        method = request.get('method', '').upper()
         
         # Check if it's a JavaScript file or other static resource
         if url.endswith('.js') or 'javascript' in content_type:
             static_resource_requests.append(request)
             continue
             
-        # Check if it's an actual API endpoint
-        if (('/api/' in url or '.api.' in url or '/common/' in url or '/data/' in url) and 
-            ('json' in content_type or 'application/json' in content_type)):
+        # Check if it has indicators of being a data API
+        has_api_indicators = (
+            '/api/' in url or 
+            '.api.' in url or 
+            '/v1/' in url or 
+            '/v2/' in url or 
+            '/data/' in url or
+            '/common/' in url
+        )
+        
+        is_data_response = (
+            'json' in content_type or 
+            'application/json' in content_type
+        )
+        
+        # Non-GET methods are more likely to be important API calls
+        is_action_method = method != 'GET'
+            
+        # Categorize based on likelihood of being a relevant API
+        if has_api_indicators and is_data_response:
             data_api_requests.append(request)
-            continue
-            
-        # Other possible API endpoints
-        if 'json' in content_type or 'application/json' in content_type:
+        elif is_data_response or is_action_method or has_api_indicators:
             possible_api_requests.append(request)
-            continue
-            
-        # Everything else
-        static_resource_requests.append(request)
+        else:
+            static_resource_requests.append(request)
     
     # Combine the lists with priorities
     filtered_requests = data_api_requests + possible_api_requests + static_resource_requests
@@ -71,10 +83,10 @@ def optimize_for_tokens(api_requests: List[Dict[str, Any]], max_tokens: int = 12
         }
         
         # Include only important headers
-        important_headers = ['content-type', 'authorization', 'accept', 'user-agent', 'origin', 'referer']
+        important_headers = ['content-type', 'authorization', 'accept', 'user-agent', 'origin', 'referer', 'x-api-key']
         optimized_request['headers'] = {
             k: v for k, v in request.get('headers', {}).items()
-            if k.lower() in important_headers
+            if k.lower() in important_headers or 'auth' in k.lower() or 'token' in k.lower() or 'key' in k.lower()
         }
         
         # Include query parameters
@@ -101,15 +113,40 @@ def optimize_for_tokens(api_requests: List[Dict[str, Any]], max_tokens: int = 12
             if 'params' in request.get('body', {}) and request['body']['params']:
                 optimized_request['body']['params'] = request['body']['params']
         
-        # Include response body if present (summarized for non-JSON responses)
+        # Include response body if present (with smart truncation for JSON)
         if 'response_body' in request:
             response_body = request.get('response_body', '')
             content_type = request.get('response_content_type', '')
             
-            if 'json' in content_type.lower() and len(response_body) > 500:
+            # Use semantic truncation for JSON responses
+            if 'json' in content_type.lower():
                 try:
                     # Parse JSON to make sure we don't truncate in the middle of a JSON structure
                     json_obj = json.loads(response_body)
+                    
+                    # If this is a large array, keep only first few items
+                    if isinstance(json_obj, list) and len(json_obj) > 3:
+                        json_obj = json_obj[:3]
+                        
+                    # If this is a large object, keep only essential properties
+                    if isinstance(json_obj, dict) and len(json_obj) > 10:
+                        # Keep a subset of keys that are likely to be more important
+                        # (metadata, status, first few data entries)
+                        priority_keys = ['id', 'name', 'title', 'description', 'status', 'metadata', 'count', 'total']
+                        truncated_obj = {}
+                        
+                        # First add priority keys if they exist
+                        for key in priority_keys:
+                            if key in json_obj:
+                                truncated_obj[key] = json_obj[key]
+                        
+                        # Then add other keys up to a limit
+                        other_keys = [k for k in json_obj.keys() if k not in truncated_obj]
+                        for key in other_keys[:7]:  # Add up to 7 more keys
+                            truncated_obj[key] = json_obj[key]
+                            
+                        json_obj = truncated_obj
+                    
                     # Convert back to string without indentation to save tokens
                     response_body = json.dumps(json_obj)
                 except json.JSONDecodeError:
@@ -144,19 +181,6 @@ def verify_har_relevance(api_requests: List[Dict[str, Any]], description: str) -
     if len(api_requests) < 5:
         print(f"Few API requests ({len(api_requests)}), assuming relevance")
         return True
-        
-    # Extract key terms from the description
-    description_lower = description.lower()
-    
-    # Automatic yes for common domains if keywords are present
-    # Weather-related terms
-    if any(term in description_lower for term in ['weather', 'temperature', 'forecast', 'climate', 'rain', 'sunny']):
-        domain_urls = [req.get('url', '').lower() for req in api_requests]
-        # If any URL contains these common weather sources, auto-approve
-        weather_domains = ['weather', 'forecast', 'sfgate', 'accuweather', 'wunderground', 'weatherapi']
-        if any(domain in ' '.join(domain_urls) for domain in weather_domains):
-            print(f"Auto-approving: Weather terms in description and matching domains in URLs")
-            return True
     
     # Get the top 20 most promising requests (or all if fewer than 20)
     sample_size = min(20, len(api_requests))
@@ -243,12 +267,6 @@ def verify_har_relevance(api_requests: List[Dict[str, Any]], description: str) -
             print(f"ATTENTION: Relevance check returned NO. This might be a false negative.")
             print(f"Description: '{description}'")
             print(f"First 3 sampled URLs: {[req.get('url', '') for req in sample_requests][:3]}")
-        
-        # Temporary override for testing - almost always return True
-        # This line can be removed once the relevance check is working properly
-        if not is_relevant and "weather" in description_lower:
-            print("Overriding NO to YES for weather-related query during testing")
-            return True
             
         return is_relevant
         
@@ -276,42 +294,41 @@ def identify_api_request_with_confidence(api_requests: List[Dict[str, Any]], des
     system_prompt = """You are an expert at identifying DATA API requests from HAR files.
     You will be provided with a list of API requests and a description of what the user is looking for.
     
-    Analyze each API request carefully, including:
-    1. The URL pattern and how it maps to the user's description
-    2. The HTTP method and its appropriateness for the described operation
-    3. The request headers and their significance
-    4. The EXACT request body format, noting whether it's JSON, form data, or plain text
-    5. The correlation between request parameters and the description
-    6. The content type of the response (prioritize JSON/data responses over JavaScript files)
+    CRITICAL SEMANTIC UNDERSTANDING:
+    - Distinguish between different types of data: STATIC REFERENCE DATA vs DYNAMIC TRACKING DATA vs MEDIA CONTENT
+    - When users ask for "specifications," "technical information," or "dimensions" they usually want STATIC REFERENCE DATA
+    - When users ask for "current status," "monitoring," or "tracking" they usually want DYNAMIC TRACKING DATA
+    - Consider whether the user is seeking properties/attributes of an entity or tracking its activities/state
     
-    IMPORTANT GUIDELINES:
-    - PRIORITIZE actual DATA API endpoints that return JSON or structured data over JavaScript files, CSS, or other static resources
-    - Look for endpoints that contain "api", "data", "common", or other indicators of actual data services
-    - Specifically ignore JavaScript files (.js) unless the user is explicitly asking for a JavaScript resource
-    - Specifically prioritize endpoints that return application/json content type
-    - Pay close attention to the EXACT format of request bodies
-    - Do not extract IDs from image URLs or other sources - only use IDs that appear in actual API requests
-    - Distinguish between related APIs that might have similar purposes
-    - If you see numeric IDs in the request, verify they are part of the actual request payload, not just referenced elsewhere
+    URL PATTERN CONSIDERATIONS:
+    - URLs containing "/data/" followed by an entity identifier often provide reference information
+    - Resource paths like "/[entity-type]/[entity-id]" frequently contain detailed information
+    - Parameters like "id," "timestamp," or "date" may indicate the type of data being requested
+    - Don't rule out HTML endpoints - they often contain embedded structured data and specifications
     
-    In addition to the API JSON, also provide a confidence score between 0 and 1 indicating how well the API matches the user's description:
-    - 0.9-1.0: Perfect match, API definitely does what the user describes
-    - 0.7-0.8: Good match, API likely does what the user describes
-    - 0.4-0.6: Possible match, API might do what the user describes
-    - 0.1-0.3: Poor match, API probably doesn't do what the user describes
+    CONTENT TYPE CONSIDERATIONS:
+    - Don't assume only JSON endpoints contain valuable data - HTML responses often contain embedded structured data
+    - Consider the HTTP method - GET requests to entity-specific URLs often retrieve reference information
+    - Text/HTML responses from RELEVANT PATHS should be rated appropriately when specifications are requested
+    
+    ANALYSIS APPROACH:
+    1. First understand the semantic intent of the user's request (reference data, real-time data, etc.)
+    2. Look for paths that match this semantic intent
+    3. Consider whether the content type and response structure would contain the data the user needs
+    4. Examine parameters and URL patterns for entity identifiers that match the user's request
+    
+    After analyzing all candidates, select the single best matching API and provide a confidence score between 0 and 1:
+    - 0.9-1.0: Perfect match, API definitely provides the requested data
+    - 0.7-0.8: Good match, API likely contains the requested data
+    - 0.4-0.6: Possible match, API might contain some requested data but not complete
+    - 0.1-0.3: Poor match, API probably contains related but not requested data
+    - 0.0-0.1: Wrong type of data entirely
     
     Return your response in this format:
     ```
     API_REQUEST_JSON
     
     CONFIDENCE_SCORE
-    ```
-    
-    For example:
-    ```
-    {"method": "GET", "url": "https://api.example.com/data"}
-    
-    0.85
     ```
     """
     
@@ -320,7 +337,7 @@ def identify_api_request_with_confidence(api_requests: List[Dict[str, Any]], des
     API Requests:
     {json.dumps(optimized_requests, indent=2)}
     
-    Return the most relevant DATA API request as a JSON object, followed by a confidence score.
+    Return the most relevant API request that matches the user's description, considering both the semantic intent and the likely data contained in each endpoint. Don't dismiss HTML pages if they might contain the requested information.
     """
     
     # Call the OpenAI API

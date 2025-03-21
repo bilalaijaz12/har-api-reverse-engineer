@@ -32,10 +32,16 @@ def extract_api_info(api_request: Dict[str, Any]) -> Dict[str, Any]:
         5. The expected response format
         
         IMPORTANT CONSIDERATIONS:
-        1. Pay close attention to the exact format and structure of request bodies
-        2. When describing parameters, distinguish between URL parameters, query parameters, and body parameters
-        3. For numeric IDs, explain their context and meaning if evident from the request structure
-        4. When describing the API, focus on what it specifically does based on its URL pattern and parameters
+        1. Use semantic understanding to determine the true purpose of the API, beyond just the URL pattern
+        2. Be specific and precise - explain exactly what the API does and how to use it
+        3. Pay close attention to the exact format and structure of request bodies
+        4. Analyze the response data to better understand the API's purpose
+        5. When describing parameters, distinguish between URL parameters, query parameters, and body parameters
+        6. For numeric IDs, explain their context and meaning if evident from the request structure
+        7. Consider the domain context (weather, flights, banking, etc.) when describing the purpose
+        8. If the API appears to be for retrieving specifications/details, explain what kind of details
+        9. Identify authentication methods by examining headers, tokens, and request patterns
+        10. Determine required vs. optional parameters by analyzing examples and context
         
         Return your analysis as a JSON object with these keys:
         {
@@ -73,15 +79,24 @@ def extract_api_info(api_request: Dict[str, Any]) -> Dict[str, Any]:
         if "response_body" in api_request:
             # Include a sample of the response
             response_body = api_request.get("response_body", "")
-            if len(response_body) > 500:
-                response_body = response_body[:500] + "... [truncated]"
+            if len(response_body) > 1000:
+                response_body = response_body[:1000] + "... [truncated]"
             simplified_request["response_sample"] = response_body
             
             # Include parsed response if available
             if "response_parsed" in api_request:
                 simplified_request["response_parsed"] = api_request["response_parsed"]
+                
+        # Include content type of response
+        if "response_content_type" in api_request:
+            simplified_request["response_content_type"] = api_request.get("response_content_type")
             
-        user_prompt = f"API Request: {json.dumps(simplified_request, indent=2)}\n\nProvide an analysis of this API."
+        user_prompt = f"""API Request: {json.dumps(simplified_request, indent=2)}
+
+User Description: Looking for an API that provides detailed information related to this domain.
+
+Provide an analysis of this API - explain what it does, required and optional parameters, authentication method, usage notes, and expected response format. Focus on giving an accurate semantic understanding of the API's purpose and functioning.
+"""
         
         # Call the OpenAI API
         response = openai.chat.completions.create(

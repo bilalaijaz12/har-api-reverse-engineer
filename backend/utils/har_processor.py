@@ -1,5 +1,6 @@
 import json
 from typing import List, Dict, Any
+import re
 
 def process_har_file(content: bytes) -> List[Dict[str, Any]]:
     """
@@ -17,7 +18,7 @@ def process_har_file(content: bytes) -> List[Dict[str, Any]]:
     # Extract entries from the HAR file
     entries = har_data.get('log', {}).get('entries', [])
     
-    # Filter API requests (non-HTML responses)
+    # Filter API requests
     api_requests = []
     
     for entry in entries:
@@ -35,8 +36,9 @@ def process_har_file(content: bytes) -> List[Dict[str, Any]]:
         if not content_type:
             continue
             
-        # Always include endpoints that look like APIs
         url = request.get('url', '')
+        
+        # Define patterns for different types of endpoints
         is_api_endpoint = (
             '/api/' in url or 
             'api.' in url or
@@ -46,13 +48,24 @@ def process_har_file(content: bytes) -> List[Dict[str, Any]]:
             '/rest/' in url or
             '.json' in url
         )
+        
+        # Data resource pattern - /data/[entity-type]/[entity-id]
+        # This pattern is common across many domains for entity data
+        data_path_match = re.search(r'/data/[^/]+/[^/?&]+', url)
+        is_data_resource = bool(data_path_match)
+        
+        # Entity resource pattern - /[entity-type]/[entity-id] 
+        # This is also common for retrieving entity data
+        entity_path_match = re.search(r'/[^/]+/[^/?&]+$', url)
+        is_entity_resource = bool(entity_path_match) and not url.endswith(('.js', '.css', '.jpg', '.png', '.gif'))
             
-        # Skip HTML responses as specified in requirements (unless it has API in path)
-        if 'text/html' in content_type.lower() and not is_api_endpoint:
+        # Skip HTML responses unless it has API or data resource patterns
+        # We want to include HTML pages that might contain entity data
+        if 'text/html' in content_type.lower() and not (is_api_endpoint or is_data_resource or is_entity_resource):
             continue
         
-        # Skip common static asset types (unless it has API in path)
-        if not is_api_endpoint and any(asset_type in content_type.lower() for asset_type in [
+        # Skip common static asset types
+        if not (is_api_endpoint or is_data_resource or is_entity_resource) and any(asset_type in content_type.lower() for asset_type in [
             'image/', 'font/', 'text/css'
         ]):
             continue
@@ -66,6 +79,14 @@ def process_har_file(content: bytes) -> List[Dict[str, Any]]:
         is_data = 'application/octet-stream' in content_type.lower()
         is_xhr = request.get('method', '') != 'GET' or is_json or is_data or is_api_endpoint
         
+        # Data resource pages should get high priority
+        if is_data_resource:
+            relevance_score += 15
+            
+        # Entity resource pages should get medium-high priority
+        if is_entity_resource:
+            relevance_score += 12
+            
         # Increase score for actual API endpoints
         if '/api/' in url or '.api.' in url:
             relevance_score += 10
@@ -85,7 +106,7 @@ def process_har_file(content: bytes) -> List[Dict[str, Any]]:
             relevance_score += 3
             
         # Include the request if it seems relevant
-        if is_xhr:
+        if is_xhr or is_data_resource or is_entity_resource or '/data/' in url:
             # Basic structure for each API request
             api_request = {
                 'method': request.get('method'),
@@ -97,7 +118,7 @@ def process_har_file(content: bytes) -> List[Dict[str, Any]]:
                 'relevance_score': relevance_score  # Add the calculated score
             }
             
-            # Extract request body if present with enhanced information
+            # Extract request body if present
             if 'postData' in request:
                 post_data = request['postData']
                 api_request['body'] = {
@@ -125,7 +146,7 @@ def process_har_file(content: bytes) -> List[Dict[str, Any]]:
                 else:
                     api_request['body']['format'] = 'text'
             
-            # Extract response body if present (truncated for large responses)
+            # Extract response body if present
             if 'content' in response and 'text' in response['content']:
                 response_text = response['content'].get('text', '')
                 # Truncate large responses to reduce token usage, but preserve at least 2000 chars
@@ -141,5 +162,8 @@ def process_har_file(content: bytes) -> List[Dict[str, Any]]:
                         pass
             
             api_requests.append(api_request)
+    
+    # Sort requests by relevance score in descending order
+    api_requests = sorted(api_requests, key=lambda x: x.get('relevance_score', 0), reverse=True)
     
     return api_requests
