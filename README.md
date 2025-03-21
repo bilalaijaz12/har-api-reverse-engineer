@@ -61,10 +61,14 @@ A tool to analyze HAR files and extract API requests with the help of LLMs.
 3. Start development server:
    yarn dev
 
-##Usage
+## Features
 
--Upload a HAR file: Drag and drop or select a HAR file to upload
--Describe the API: Enter a natural language description of the API you're looking for
--View results: See the generated curl command and API details
--Test API: Execute the API request directly from the UI
--View code: Switch between curl, Python, and JavaScript code formats
+- Upload a HAR file: Drag and drop or select a HAR file to upload
+  
+- Describe the API: Enter a natural language description of the API you're looking for
+  
+- View results: See the generated curl command and API details
+  
+- Test API: Execute the API request directly from the UI
+  
+- View code: Switch between curl, Python, and JavaScript code formats
